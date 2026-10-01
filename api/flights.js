@@ -1,15 +1,23 @@
 const BASE=(process.env.AMADEUS_BASE_URL||'https://test.api.amadeus.com').replace(/\/$/,'');
 
-async function iata(name){
+let airportDataPromise=null;
+function norm(v=''){return String(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim()}
+function km(lat1,lon1,lat2,lon2){const R=6371,to=x=>x*Math.PI/180,dLat=to(lat2-lat1),dLon=to(lon2-lon1),q=Math.sin(dLat/2)**2+Math.cos(to(lat1))*Math.cos(to(lat2))*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(q))}
+async function airportData(){if(!airportDataPromise)airportDataPromise=fetch('https://api.travelpayouts.com/data/en/airports.json').then(r=>{if(!r.ok)throw new Error('Airport dataset failed');return r.json()});return airportDataPromise}
+async function nearestAirport(lat,lon,countryCode){const all=await airportData(),good=all.filter(x=>x.flightable===true&&x.iata_type==='airport'&&x.code&&x.coordinates&&Number.isFinite(Number(x.coordinates.lat))&&Number.isFinite(Number(x.coordinates.lon)));const ranked=good.map(x=>({...x,_km:km(Number(lat),Number(lon),Number(x.coordinates.lat),Number(x.coordinates.lon))})).sort((a,b)=>a._km-b._km);const same=countryCode?ranked.find(x=>x.country_code===String(countryCode).toUpperCase()&&x._km<=350):null;return same||ranked[0]||null}
+async function iata(name,hint={}){
   const q=new URLSearchParams({term:name||'',locale:'en'});
   q.append('types[]','city'); q.append('types[]','airport');
   const r=await fetch('https://autocomplete.travelpayouts.com/places2?'+q);
   if(!r.ok)throw new Error('Airport lookup failed');
-  const a=await r.json();
-  const best=a.find(v=>v.code);
+  const a=await r.json(),wanted=norm(name);
+  const exact=a.find(v=>v.code&&(norm(v.name)===wanted||norm(v.city_name)===wanted||norm(v.name_translations?.en)===wanted));
+  if(exact)return {code:exact.code||exact.city_code,name:exact.name||exact.city_name||name,city:exact.city_name||exact.name||name,distanceKm:0};
+  if(Number.isFinite(Number(hint.lat))&&Number.isFinite(Number(hint.lon))){const near=await nearestAirport(Number(hint.lat),Number(hint.lon),hint.countryCode);if(near)return {code:near.code,name:near.name||near.code,city:near.city_code||near.code,distanceKm:Math.round(near._km)};}
+  const best=a.find(v=>v.code)||a.find(v=>v.city_code);
   const code=best?.code||best?.city_code;
   if(!code)throw new Error('Не намерих летищен код за '+name);
-  return code;
+  return {code,name:best?.name||name,city:best?.city_name||name,distanceKm:null};
 }
 function mins(v){const n=Number(v)||0,h=Math.floor(n/60),m=n%60;return [h?`${h} ч`:null,m?`${m} мин`:null].filter(Boolean).join(' ')||'—'}
 function vInt(n){const a=[];n=Math.max(0,Number(n)||0);do{let b=n&127;n=Math.floor(n/128);if(n)b|=128;a.push(b)}while(n);return a}
@@ -33,14 +41,14 @@ function googleFlightsUrl(origin,destination,b){
 async function serpFlights(b){
   const key=process.env.SERPAPI_KEY;if(!key)return null;
   const adults=Math.max(1,Math.min(9,Number(b.adults)||1));
-  const [origin,destination]=await Promise.all([iata(b.from||'Sofia'),iata(b.to||'')]);
+  const [originPlace,destinationPlace]=await Promise.all([iata(b.from||'Sofia'),iata(b.to||'',b.destination||{})]),origin=originPlace.code,destination=destinationPlace.code;
   const q=new URLSearchParams({engine:'google_flights',departure_id:origin,arrival_id:destination,outbound_date:b.departureDate,currency:'EUR',hl:'en',gl:'bg',adults:String(adults),api_key:key});
   if(b.returnDate)q.set('return_date',b.returnDate);
   const r=await fetch('https://serpapi.com/search.json?'+q),d=await r.json();
   if(!r.ok||d.error)throw new Error(d.error||'Google Flights search failed');
   const raw=[...(d.best_flights||[]),...(d.other_flights||[])];
   const results=raw.slice(0,10).map((o,i)=>{const fs=o.flights||[],first=fs[0]||{},last=fs[fs.length-1]||{},airlines=[...new Set(fs.map(x=>x.airline).filter(Boolean))];return{id:`serp-${i}`,carrier:airlines.join(' + ')||'Полет',route:`${origin} → ${destination}`,departure:first.departure_airport?.time||'',arrival:last.arrival_airport?.time||'',duration:mins(o.total_duration),stops:Math.max(0,fs.length-1),price:o.price??'',currency:'EUR',source:'Google Flights',logo:first.airline_logo||o.airline_logo||'',token:o.departure_token||''}}).filter(x=>x.price!==''&&x.price!=null);
-  return {configured:true,provider:'Google Flights via SerpApi',origin,destination,results};
+  return {configured:true,provider:'Google Flights via SerpApi',origin,destination,originPlace,destinationPlace,results};
 }
 
 async function token(){const id=process.env.AMADEUS_CLIENT_ID,secret=process.env.AMADEUS_CLIENT_SECRET;if(!id||!secret)return null;const body=new URLSearchParams({grant_type:'client_credentials',client_id:id,client_secret:secret});const r=await fetch(BASE+'/v1/security/oauth2/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body});if(!r.ok)throw new Error('Amadeus authentication failed');return (await r.json()).access_token}
@@ -48,4 +56,4 @@ async function cityCode(name,t){const q=new URLSearchParams({subType:'CITY,AIRPO
 function duration(x=''){const h=(x.match(/(\d+)H/)||[])[1],m=(x.match(/(\d+)M/)||[])[1];return [h?`${h} ч`:null,m?`${m} мин`:null].filter(Boolean).join(' ')}
 async function amadeusFlights(b){const t=await token();if(!t)return null;const adults=Math.max(1,Math.min(9,Number(b.adults)||1)),[origin,destination]=await Promise.all([cityCode(b.from||'Sofia',t),cityCode(b.to||'',t)]);const q=new URLSearchParams({originLocationCode:origin,destinationLocationCode:destination,departureDate:b.departureDate,adults:String(adults),currencyCode:'EUR',max:'8'});if(b.returnDate)q.set('returnDate',b.returnDate);const r=await fetch(BASE+'/v2/shopping/flight-offers?'+q,{headers:{authorization:'Bearer '+t}}),d=await r.json();if(!r.ok)throw new Error(d.errors?.[0]?.detail||'Flight search failed');const carriers=d.dictionaries?.carriers||{},results=(d.data||[]).map(o=>{const it=o.itineraries?.[0],segs=it?.segments||[],first=segs[0],last=segs[segs.length-1],code=o.validatingAirlineCodes?.[0]||first?.carrierCode||'';return{id:o.id,carrier:carriers[code]||code,route:`${origin} → ${destination}`,departure:first?.departure?.at?.replace('T',' ')||'',arrival:last?.arrival?.at?.replace('T',' ')||'',duration:duration(it?.duration),stops:Math.max(0,segs.length-1),price:o.price?.grandTotal||o.price?.total||'',currency:o.price?.currency||'EUR',source:'Amadeus'}});return{configured:true,provider:'Amadeus',origin,destination,results}}
 
-module.exports=async function handler(req,res){if(req.method!=='POST')return res.status(405).json({error:'POST only'});try{const b=req.body||{},data=await serpFlights(b)||await amadeusFlights(b);if(!data){let origin='',destination='',fallbackUrl='';try{[origin,destination]=await Promise.all([iata(b.from||'Sofia'),iata(b.to||'')]);fallbackUrl=googleFlightsUrl(origin,destination,b)}catch(_){}return res.status(200).json({configured:false,provider:'Google Flights / Amadeus',needs:'SERPAPI_KEY or Amadeus credentials',origin,destination,fallbackUrl})}res.setHeader('Cache-Control','s-maxage=180, stale-while-revalidate=300');return res.status(200).json(data)}catch(e){return res.status(500).json({error:e.message||'Flight search failed'})}};
+module.exports=async function handler(req,res){if(req.method!=='POST')return res.status(405).json({error:'POST only'});try{const b=req.body||{},data=await serpFlights(b)||await amadeusFlights(b);if(!data){let origin='',destination='',fallbackUrl='';try{{const op=await iata(b.from||'Sofia'),dp=await iata(b.to||'',b.destination||{});origin=op.code;destination=dp.code;fallbackUrl=googleFlightsUrl(origin,destination,b);var originPlace=op,destinationPlace=dp}}catch(_){}return res.status(200).json({configured:false,provider:'Google Flights / Amadeus',needs:'SERPAPI_KEY or Amadeus credentials',origin,destination,originPlace,destinationPlace,fallbackUrl})}res.setHeader('Cache-Control','s-maxage=180, stale-while-revalidate=300');return res.status(200).json(data)}catch(e){return res.status(500).json({error:e.message||'Flight search failed'})}};
