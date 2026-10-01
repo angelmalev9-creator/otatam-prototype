@@ -29,7 +29,7 @@ module.exports = async function handler(req,res){
 
     const photos=[]; const sources=[]; let description=''; let wikiUrl=null;
     if(typeof p.image==='string' && /^https?:\/\//i.test(p.image)) {
-      photos.push(p.image); sources.push('Снимка от OpenStreetMap');
+      photos.push(p.image); sources.push('Снимка от Wikipedia/Wikimedia');
     }
 
     const tasks=[];
