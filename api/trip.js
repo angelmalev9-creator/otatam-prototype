@@ -8,7 +8,7 @@ const placeCache = new Map();
 
 async function getJSON(url) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 7000);
+  const timer = setTimeout(() => ctl.abort(), 9000);
   try {
     const r = await fetch(url, { signal: ctl.signal, headers: { 'user-agent': 'OTATAM-prototype/1.1' } });
     if (!r.ok) throw new Error(`Provider error ${r.status}`);
@@ -34,24 +34,14 @@ async function overpass(lat, lon, limit) {
   const key = `${lat.toFixed(3)}:${lon.toFixed(3)}:${limit}`;
   const cached = placeCache.get(key);
   if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.data;
-  const q = `[out:json][timeout:8];(
-    nwr["tourism"="attraction"]["name"](around:5500,${lat},${lon});
-    nwr["tourism"="museum"]["name"](around:5500,${lat},${lon});
-    nwr["historic"]["name"](around:5500,${lat},${lon});
-    nwr["leisure"="park"]["name"](around:5500,${lat},${lon});
-    nwr["amenity"="place_of_worship"]["name"](around:5500,${lat},${lon});
-  );out center tags ${Math.max(24, limit*3)};`;
-  const endpoints = ['https://overpass.kumi.systems/api/interpreter?data=', 'https://overpass-api.de/api/interpreter?data='];
-  const d = await Promise.any(endpoints.map(base => getJSON(base + encodeURIComponent(q))));
+  const q = `[out:json][timeout:8];nwr["tourism"~"attraction|museum"]["name"](around:4500,${lat},${lon});out center tags ${Math.max(24, limit)};`;
+  const d = await getJSON('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(q));
   const out=[]; const seen=new Set();
   for (const e of d.elements || []) {
     const name=e.tags?.name, plat=e.lat??e.center?.lat, plon=e.lon??e.center?.lon;
     if (!name || plat==null || plon==null || seen.has(name)) continue;
     seen.add(name);
-    out.push({
-      name,lat:plat,lon:plon,tags:e.tags||{},osmType:e.type,osmId:e.id,
-      osmUrl:`https://www.openstreetmap.org/${e.type}/${e.id}`
-    });
+    out.push({name,lat:plat,lon:plon,tags:e.tags||{},osmType:e.type,osmId:e.id,osmUrl:`https://www.openstreetmap.org/${e.type}/${e.id}`});
     if (out.length >= limit) break;
   }
   placeCache.set(key,{at:Date.now(),data:out});
