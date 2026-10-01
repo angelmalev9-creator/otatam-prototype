@@ -40,6 +40,13 @@ async function commonsCategoryPhoto(category){
   }
   return null;
 }
+async function reverseGeo(lat,lon){
+  try{
+    const u=`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&accept-language=bg,en`;
+    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),3500);
+    try{const r=await fetch(u,{signal:ctl.signal,headers:{'user-agent':'OTATAM/1.0 contact: support@otatam.app','accept-language':'bg,en'}});if(!r.ok)return null;const d=await r.json();return d}catch(e){return null}finally{clearTimeout(timer)}
+  }catch(e){return null}
+}
 async function commonsGeoPhoto(lat,lon,name){
   const u=`https://commons.wikimedia.org/w/api.php?action=query&generator=geosearch&ggsprimary=all&ggsnamespace=6&ggslimit=20&ggsradius=120&ggscoord=${lat}%7C${lon}&prop=imageinfo&iiprop=url|mime&iiurlwidth=1400&format=json`;
   const d=await getJSON(u);
@@ -113,13 +120,16 @@ module.exports = async function handler(req,res){
       }catch(e){}
     }
 
+    let reverse=null;
+    if(!p.prefetch && !p.address) reverse=await reverseGeo(Number(p.lat),Number(p.lon));
+    const reverseOsm=reverse?.osm_type&&reverse?.osm_id?{url:`https://www.openstreetmap.org/${reverse.osm_type}/${reverse.osm_id}`,type:reverse.osm_type,id:reverse.osm_id}:null;
     const exactPhotoCount=uniq(photos).length;
     res.setHeader('Cache-Control','s-maxage=3600, stale-while-revalidate=86400');
     return res.status(200).json({
       name:p.name, lat:Number(p.lat), lon:Number(p.lon),
-      address:p.address||null, openingHours:p.openingHours||null,
+      address:p.address||reverse?.display_name||null, openingHours:p.openingHours||null,
       website:p.website||null, phone:p.phone||null,
-      osm:p.osm||null, wikidata:p.wikidata||null, wikipedia:p.wikipedia||null,
+      osm:p.osm||reverseOsm||null, wikidata:p.wikidata||null, wikipedia:p.wikipedia||null,
       wikipediaUrl:wikiUrl,
       description:description || 'За това място все още няма потвърдено редакционно описание.',
       photos:uniq(photos), photoSources:uniq(sources),
