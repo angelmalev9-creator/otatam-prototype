@@ -12,6 +12,14 @@
     {
       "source": "/api/place",
       "destination": "/api/place.js"
+    },
+    {
+      "source": "/api/flights",
+      "destination": "/api/flights.js"
+    },
+    {
+      "source": "/api/hotels",
+      "destination": "/api/hotels.js"
     }
   ],
   "headers": [
