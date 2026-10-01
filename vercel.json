@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/",
-      "destination": "/index.html"
+      "destination": "/public/index.html"
     },
     {
       "source": "/api/trip",
@@ -33,7 +33,7 @@
       ]
     },
     {
-      "source": "/index.html",
+      "source": "/public/index.html",
       "headers": [
         {
           "key": "Cache-Control",
