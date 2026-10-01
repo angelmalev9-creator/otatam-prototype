@@ -6,8 +6,8 @@ async function iata(name){
   const r=await fetch('https://autocomplete.travelpayouts.com/places2?'+q);
   if(!r.ok)throw new Error('Airport lookup failed');
   const a=await r.json();
-  const x=a.find(v=>v.type==='city'&&v.code)||a.find(v=>v.city_code)||a.find(v=>v.code);
-  const code=x?.code||x?.city_code;
+  const best=a.find(v=>v.code);
+  const code=best?.code||best?.city_code;
   if(!code)throw new Error('Не намерих летищен код за '+name);
   return code;
 }
