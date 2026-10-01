@@ -1,36 +1,21 @@
 const BASE=(process.env.AMADEUS_BASE_URL||'https://test.api.amadeus.com').replace(/\/$/,'');
-async function token(){
-  const id=process.env.AMADEUS_CLIENT_ID, secret=process.env.AMADEUS_CLIENT_SECRET;
-  if(!id||!secret)return null;
-  const body=new URLSearchParams({grant_type:'client_credentials',client_id:id,client_secret:secret});
-  const r=await fetch(BASE+'/v1/security/oauth2/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body});
-  if(!r.ok)throw new Error('Amadeus authentication failed');
-  return (await r.json()).access_token;
+
+async function serpHotels(b){
+  const key=process.env.SERPAPI_KEY;if(!key)return null;
+  const adults=Math.max(1,Math.min(9,Number(b.adults)||1));
+  const q=new URLSearchParams({engine:'google_hotels',q:`hotels in ${b.to||''}`,check_in_date:b.departureDate,check_out_date:b.returnDate,adults:String(adults),currency:'EUR',hl:'en',gl:'bg',api_key:key});
+  const r=await fetch('https://serpapi.com/search.json?'+q),d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||'Google Hotels search failed');
+  const results=(d.properties||[]).filter(x=>x.type==='hotel').slice(0,12).map((x,i)=>{
+    const sources=(x.prices||[]).map(p=>p.source).filter(Boolean),booking=(x.prices||[]).find(p=>/booking\.com/i.test(p.source||''));
+    const total=x.total_rate?.extracted_lowest,night=x.rate_per_night?.extracted_lowest;
+    return {id:x.property_token||`serp-hotel-${i}`,name:x.name||'Хотел',address:[x.hotel_class,x.overall_rating?`★ ${x.overall_rating}`:''].filter(Boolean).join(' · '),room:sources.length?`Цени от: ${sources.slice(0,3).join(', ')}`:'Google Hotels',price:total??night??'',nightlyPrice:night??'',currency:'EUR',source:'Google Hotels',bookingAvailable:!!booking,bookingPricePerNight:booking?.rate_per_night?.extracted_lowest??null,image:x.images?.[0]?.thumbnail||x.images?.[0]?.original_image||'',rating:x.overall_rating??null,reviews:x.reviews??null,propertyToken:x.property_token||'',link:x.link||''};
+  }).filter(x=>x.price!==''&&x.price!=null);
+  return {configured:true,provider:'Google Hotels via SerpApi',results};
 }
-async function cityCode(name,t){
-  const q=new URLSearchParams({subType:'CITY',keyword:name,'page[limit]':'5',view:'LIGHT'});
-  const r=await fetch(BASE+'/v1/reference-data/locations?'+q,{headers:{authorization:'Bearer '+t}});
-  if(!r.ok)throw new Error('City lookup failed');
-  const data=(await r.json()).data||[],city=data.find(x=>x.subType==='CITY'&&x.iataCode)||data.find(x=>x.iataCode);
-  if(!city)throw new Error('Не намерих градски код за '+name);
-  return city.iataCode;
-}
-module.exports=async function handler(req,res){
-  if(req.method!=='POST')return res.status(405).json({error:'POST only'});
-  try{
-    const t=await token();
-    if(!t)return res.status(200).json({configured:false,provider:'Amadeus'});
-    const b=req.body||{},adults=Math.max(1,Math.min(9,Number(b.adults)||1)),code=await cityCode(b.to||'',t);
-    const listQ=new URLSearchParams({cityCode:code,radius:'20',radiusUnit:'KM',hotelSource:'ALL'});
-    const lr=await fetch(BASE+'/v1/reference-data/locations/hotels/by-city?'+listQ,{headers:{authorization:'Bearer '+t}});
-    const ld=await lr.json(); if(!lr.ok)throw new Error(ld.errors?.[0]?.detail||'Hotel list failed');
-    const ids=(ld.data||[]).slice(0,15).map(x=>x.hotelId).filter(Boolean);
-    if(!ids.length)return res.status(200).json({configured:true,provider:'Amadeus',results:[]});
-    const q=new URLSearchParams({hotelIds:ids.join(','),adults:String(adults),checkInDate:b.departureDate,checkOutDate:b.returnDate,roomQuantity:'1',currency:'EUR',bestRateOnly:'true'});
-    const r=await fetch(BASE+'/v3/shopping/hotel-offers?'+q,{headers:{authorization:'Bearer '+t}});
-    const d=await r.json(); if(!r.ok)throw new Error(d.errors?.[0]?.detail||'Hotel search failed');
-    const results=(d.data||[]).slice(0,10).map(x=>{const o=x.offers?.[0]||{};return{id:x.hotel?.hotelId||'',name:x.hotel?.name||'Хотел',address:x.hotel?.cityCode||code,room:o.room?.description?.text||o.room?.typeEstimated?.category||'',price:o.price?.total||'',currency:o.price?.currency||'EUR'};});
-    res.setHeader('Cache-Control','s-maxage=180, stale-while-revalidate=300');
-    return res.status(200).json({configured:true,provider:'Amadeus',cityCode:code,results});
-  }catch(e){return res.status(500).json({error:e.message||'Hotel search failed'})}
-};
+
+async function token(){const id=process.env.AMADEUS_CLIENT_ID,secret=process.env.AMADEUS_CLIENT_SECRET;if(!id||!secret)return null;const body=new URLSearchParams({grant_type:'client_credentials',client_id:id,client_secret:secret});const r=await fetch(BASE+'/v1/security/oauth2/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body});if(!r.ok)throw new Error('Amadeus authentication failed');return (await r.json()).access_token}
+async function cityCode(name,t){const q=new URLSearchParams({subType:'CITY',keyword:name,'page[limit]':'5',view:'LIGHT'});const r=await fetch(BASE+'/v1/reference-data/locations?'+q,{headers:{authorization:'Bearer '+t}});if(!r.ok)throw new Error('City lookup failed');const data=(await r.json()).data||[],city=data.find(x=>x.subType==='CITY'&&x.iataCode)||data.find(x=>x.iataCode);if(!city)throw new Error('Не намерих градски код за '+name);return city.iataCode}
+async function amadeusHotels(b){const t=await token();if(!t)return null;const adults=Math.max(1,Math.min(9,Number(b.adults)||1)),code=await cityCode(b.to||'',t),listQ=new URLSearchParams({cityCode:code,radius:'20',radiusUnit:'KM',hotelSource:'ALL'});const lr=await fetch(BASE+'/v1/reference-data/locations/hotels/by-city?'+listQ,{headers:{authorization:'Bearer '+t}}),ld=await lr.json();if(!lr.ok)throw new Error(ld.errors?.[0]?.detail||'Hotel list failed');const ids=(ld.data||[]).slice(0,15).map(x=>x.hotelId).filter(Boolean);if(!ids.length)return{configured:true,provider:'Amadeus',results:[]};const q=new URLSearchParams({hotelIds:ids.join(','),adults:String(adults),checkInDate:b.departureDate,checkOutDate:b.returnDate,roomQuantity:'1',currency:'EUR',bestRateOnly:'true'}),r=await fetch(BASE+'/v3/shopping/hotel-offers?'+q,{headers:{authorization:'Bearer '+t}}),d=await r.json();if(!r.ok)throw new Error(d.errors?.[0]?.detail||'Hotel search failed');const results=(d.data||[]).slice(0,10).map(x=>{const o=x.offers?.[0]||{};return{id:x.hotel?.hotelId||'',name:x.hotel?.name||'Хотел',address:x.hotel?.cityCode||code,room:o.room?.description?.text||o.room?.typeEstimated?.category||'',price:o.price?.total||'',currency:o.price?.currency||'EUR',source:'Amadeus'}});return{configured:true,provider:'Amadeus',cityCode:code,results}}
+
+module.exports=async function handler(req,res){if(req.method!=='POST')return res.status(405).json({error:'POST only'});try{const b=req.body||{},data=await serpHotels(b)||await amadeusHotels(b);if(!data)return res.status(200).json({configured:false,provider:'Google Hotels / Amadeus',needs:'SERPAPI_KEY or Amadeus credentials'});res.setHeader('Cache-Control','s-maxage=180, stale-while-revalidate=300');return res.status(200).json(data)}catch(e){return res.status(500).json({error:e.message||'Hotel search failed'})}};
