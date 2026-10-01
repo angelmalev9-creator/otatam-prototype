@@ -1,6 +1,7 @@
 {
   "version": 2,
   "rewrites": [
+    { "source": "/", "destination": "/app.html" },
     { "source": "/api/trip", "destination": "/api/trip.js" }
   ],
   "headers": [
