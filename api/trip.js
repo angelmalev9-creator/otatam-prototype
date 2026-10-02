@@ -152,9 +152,16 @@ function buildDays(places,input,dest){
   return days;
 }
 function makeBudget(input){
-  const total=Number(input.budget)||0,ratios=input.style==='comfort'?{'Полети':.27,'Настаняване':.39,'Храна':.17,'Активности':.08,'Транспорт':.05,'Резерв':.04}:input.style==='save'?{'Полети':.25,'Настаняване':.28,'Храна':.18,'Активности':.10,'Транспорт':.07,'Резерв':.12}:{'Полети':.27,'Настаняване':.34,'Храна':.18,'Активности':.10,'Транспорт':.06,'Резерв':.05},categories={};
-  for(const[k,v]of Object.entries(ratios))categories[k]=Math.round(total*v);
-  const buffer=categories['Резерв'];delete categories['Резерв'];return{categories,planned:Object.values(categories).reduce((a,b)=>a+b,0),buffer};
+  const total=Number(input.budget)||0;
+  return{
+    mode:'exact-only',
+    currency:'EUR',
+    total,
+    categories:{'Полети':null,'Настаняване':null,'Храна':null,'Активности':null,'Транспорт':null},
+    planned:null,
+    buffer:null,
+    note:'OTATAM не измисля разходи. Бюджетът се потвърждава само от избрани live оферти и въведени от пътуващия лимити.'
+  };
 }
 function weatherText(w){
   const rainy=[51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99].includes(w.code);
@@ -172,6 +179,6 @@ module.exports=async function handler(req,res){
     if(places.length<4)throw new Error('Няма достатъчно надеждни места за тази дестинация');
     const days=buildDays(places,input,dest),all=days.flatMap(x=>x.stops),wt=weatherText(w),budget=makeBudget(input);
     res.setHeader('Cache-Control','s-maxage=300, stale-while-revalidate=600');
-    return res.status(200).json({generatedAt:new Date().toISOString(),input,destination:dest,weather:{...w,...wt},days,budget,totalStops:all.length,hiddenGems:all.filter(x=>x.hiddenGem).length,photoSpots:all.filter(x=>x.image).length,confidence:{places:'wikipedia-wikidata-coordinates',weather:'live',budget:'estimated',flights:'external-live-search',stay:'external-live-search'},status:'needs_review'});
+    return res.status(200).json({generatedAt:new Date().toISOString(),input,destination:dest,weather:{...w,...wt},days,budget,totalStops:all.length,hiddenGems:all.filter(x=>x.hiddenGem).length,photoSpots:all.filter(x=>x.image).length,confidence:{places:'wikipedia-wikidata-coordinates',weather:'live',budget:'exact-after-live-selections',flights:'external-live-search',stay:'external-live-search'},status:'needs_review'});
   }catch(e){return res.status(500).json({error:e.message||'Генерирането не успя'})}
 };
