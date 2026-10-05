@@ -3,7 +3,7 @@ async function getJSON(url) {
   const timer = setTimeout(() => ctl.abort(), 6500);
   try {
     const r = await fetch(url, { signal: ctl.signal, headers: { 'user-agent': 'OTATAM-prototype/1.3' } });
-    if (!r.ok) throw new Error(`Грешка от доставчик ${r.status}`);
+    if (!r.ok) throw new Error(`Provider error ${r.status}`);
     return await r.json();
   } finally { clearTimeout(timer); }
 }
@@ -60,11 +60,11 @@ async function commonsGeoPhoto(lat,lon,name){
 }
 
 module.exports = async function handler(req,res){
-  if(req.method!=='POST') return res.status(405).json({error:'Разрешен е само POST'});
+  if(req.method!=='POST') return res.status(405).json({error:'POST only'});
   try{
     const p=req.body||{};
     if(!p.name || !Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lon))) {
-      return res.status(400).json({error:'Липсват точни данни за мястото'});
+      return res.status(400).json({error:'Exact place data is missing'});
     }
 
     const photos=[]; const sources=[]; let description=''; let wikiUrl=null;
@@ -101,12 +101,12 @@ module.exports = async function handler(req,res){
       }
     }
 
-    if(!photos.length && inputImage && !suspiciousImageName(inputImage)){ photos.push(inputImage); sources.push('Wikipedia / свързана снимка'); }
+    if(!photos.length && inputImage && !suspiciousImageName(inputImage)){ photos.push(inputImage); sources.push('Wikipedia / linked image'); }
 
     if(!photos.length && (commonsCategory || commonsPage)){
       try{
         const hit=await commonsCategoryPhoto(commonsCategory || commonsPage);
-        if(hit){ photos.push(hit.url); sources.push('Wikimedia Commons категория за точното място'); }
+        if(hit){ photos.push(hit.url); sources.push('Wikimedia Commons category for the exact place'); }
       }catch(e){}
     }
 
@@ -115,7 +115,7 @@ module.exports = async function handler(req,res){
         const hit=await commonsGeoPhoto(Number(p.lat),Number(p.lon),p.name);
         if(hit && hit.matched && !suspiciousImageName(hit.title)){
           photos.push(hit.url);
-          sources.push('Wikimedia Commons · име + близки координати');
+          sources.push('Wikimedia Commons · name + nearby coordinates');
         }
       }catch(e){}
     }
@@ -131,12 +131,12 @@ module.exports = async function handler(req,res){
       website:p.website||null, phone:p.phone||null,
       osm:p.osm||reverseOsm||null, wikidata:p.wikidata||null, wikipedia:p.wikipedia||null,
       wikipediaUrl:wikiUrl,
-      description:description || 'За това място все още няма потвърдено редакционно описание.',
+      description:description || 'No verified editorial description is available for this place yet.',
       photos:uniq(photos), photoSources:uniq(sources),
-      photoConfidence:exactPhotoCount ? 'снимка-от-свързан-свободен-източник' : 'няма-потвърдена-снимка',
-      coordinateConfidence:'точен-osm-обект'
+      photoConfidence:exactPhotoCount ? 'linked-free-source-image' : 'no-verified-image',
+      coordinateConfidence:'exact-osm-object'
     });
   }catch(e){
-    return res.status(500).json({error:e.message||'Данните за мястото не се заредиха'});
+    return res.status(500).json({error:e.message||'Place data could not be loaded'});
   }
 };
