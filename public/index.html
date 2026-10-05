@@ -106,6 +106,43 @@ $('placeModal').addEventListener('click',e=>{if(e.target===$('placeModal'))close
 localStorage.removeItem('otatam_last_trip');
 $('app').classList.remove('show');
 if(!$('startDate').value){const d=new Date();d.setDate(d.getDate()+14);$('startDate').value=d.toISOString().slice(0,10)}
-$('generate').onclick=async()=>{const btn=$('generate');btn.disabled=true;$('loadingOverlay').classList.add('show');$('status').textContent='Building a new route for your destination…';$('app').classList.remove('show');try{const interests=[...document.querySelectorAll('.chip.on')].map(x=>x.dataset.v),payload={destination:$('destination').value.trim(),departure:$('departure').value.trim(),startDate:$('startDate').value,travellers:+$('travellers').value,days:+$('days').value,budget:+$('budget').value,pace:$('pace').value,style:$('style').value,interests},r=await fetch('/api/trip',{method:'POST',headers:{'content-type':'application/json','cache-control':'no-cache'},cache:'no-store',body:JSON.stringify(payload)}),data=await r.json();if(!r.ok)throw new Error(data.error||'Trip generation failed');$('status').textContent=`✓ Ready: ${data.destination.displayName||data.destination.name}`;render(data)}catch(e){$('status').textContent='Error: '+e.message;$('app').classList.remove('show')}finally{btn.disabled=false;$('loadingOverlay').classList.remove('show')}};
+async function clientTripFallback(input){
+  const clampClient=(n,a,b)=>Math.max(a,Math.min(b,n));
+  const destination=(input.destination||'Vienna').trim()||'Vienna';
+  const geoRes=await fetch('https://geocoding-api.open-meteo.com/v1/search?name='+encodeURIComponent(destination)+'&count=10&language=en&format=json');
+  if(!geoRes.ok)throw new Error('Destination lookup failed');
+  const geo=(await geoRes.json()).results||[];
+  if(!geo.length)throw new Error('Destination not found');
+  const g=geo[0],dest={name:g.name,searchName:g.name,country:g.country||'',countryCode:g.country_code||'',lat:g.latitude,lon:g.longitude,timezone:g.timezone||'auto',featureCode:g.feature_code||'',requestedCountry:null,displayName:g.name};
+  input.days=clampClient(Number(input.days)||4,1,10);input.travellers=clampClient(Number(input.travellers)||2,1,10);input.budget=Math.max(150,Number(input.budget)||1500);
+  const per=input.pace==='relaxed'?3:input.pace==='fast'?5:4,needed=clampClient(input.days*per,8,24);
+  const qp=new URLSearchParams({action:'query',generator:'geosearch',ggscoord:dest.lat+'|'+dest.lon,ggsradius:'10000',ggslimit:String(Math.max(60,needed*5)),ggsnamespace:'0',prop:'coordinates|pageimages|pageprops',piprop:'thumbnail',pithumbsize:'1200',format:'json',origin:'*'});
+  const [wikiRes,weatherRes]=await Promise.all([
+    fetch('https://en.wikipedia.org/w/api.php?'+qp.toString()),
+    fetch('https://api.open-meteo.com/v1/forecast?latitude='+dest.lat+'&longitude='+dest.lon+'&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto')
+  ]);
+  if(!wikiRes.ok||!weatherRes.ok)throw new Error('Live destination data could not be loaded');
+  const wiki=await wikiRes.json(),wd=await weatherRes.json(),pages=Object.values(wiki.query?.pages||{}).filter(p=>p.coordinates?.[0]);
+  pages.sort((a,b)=>Number(!!b.thumbnail)-Number(!!a.thumbnail)||(a.index||999)-(b.index||999));
+  const seen=new Set(),places=[];
+  for(const p of pages){
+    const key=String(p.title||'').toLowerCase();if(!p.title||seen.has(key))continue;seen.add(key);
+    const coord=p.coordinates[0],img=p.thumbnail?.source||null;
+    places.push({name:p.title,lat:coord.lat,lon:coord.lon,image:img,wikidata:p.pageprops?.wikibase_item||null,wikipedia:'en:'+p.title,source:'Wikipedia GeoSearch / Wikidata'});
+    if(places.length>=needed)break;
+  }
+  if(places.length<4)throw new Error('Not enough reliable places were found for this destination');
+  const days=[];
+  for(let d=0;d<input.days;d++){
+    const slice=places.slice(d*per,d*per+per);if(!slice.length)break;
+    const stops=slice.map((p,i)=>({name:p.name,lat:p.lat,lon:p.lon,category:'Place to visit',duration:60,booking:false,description:'A real place with verifiable coordinates and a traceable source.',why:'Selected for geographic proximity and trip flow.',photoTip:'Check opening hours and access conditions before visiting.',hiddenGem:(d*per+i)%4===3,wikidata:p.wikidata,wikipedia:p.wikipedia,image:p.image,website:null,phone:null,openingHours:null,address:null,source:p.source,coordinateConfidence:'exact-place-coordinates'}));
+    days.push({title:d===0?'First day in '+dest.name:d===input.days-1?'Final highlights':'Exploring '+dest.name,cover:stops.find(s=>s.image)?.image||null,stops});
+  }
+  const current=wd.current||{},rainy=[51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99].includes(current.weather_code);
+  const weather={temperature:current.temperature_2m??0,feels:current.apparent_temperature??0,code:current.weather_code??0,wind:current.wind_speed_10m??0,summary:'Right now: '+Math.round(current.temperature_2m??0)+'°C, feels like '+Math.round(current.apparent_temperature??0)+'°C, wind '+Math.round(current.wind_speed_10m??0)+' km/h.',switch:rainy?'Because of the weather, prioritise indoor places and re-check outdoor activities.':'The weather suits the outdoor plan; keep one indoor alternative.'};
+  const all=days.flatMap(x=>x.stops),planned=Math.round(input.budget*.96*100)/100;
+  return{generatedAt:new Date().toISOString(),input,destination:dest,weather,days,budget:{mode:'planning-allocation',currency:'EUR',total:input.budget,planned,buffer:Math.round((input.budget-planned)*100)/100},totalStops:all.length,hiddenGems:all.filter(x=>x.hiddenGem).length,photoSpots:all.filter(x=>x.image).length,confidence:{places:'wikipedia-geosearch-browser-fallback',weather:'open-meteo-live',budget:'planning-targets'},status:'needs_review'};
+}
+$('generate').onclick=async()=>{const btn=$('generate');btn.disabled=true;$('loadingOverlay').classList.add('show');$('status').textContent='Building a new route for your destination…';$('app').classList.remove('show');try{const interests=[...document.querySelectorAll('.chip.on')].map(x=>x.dataset.v),payload={destination:$('destination').value.trim(),departure:$('departure').value.trim(),startDate:$('startDate').value,travellers:+$('travellers').value,days:+$('days').value,budget:+$('budget').value,pace:$('pace').value,style:$('style').value,interests};let data;try{const r=await fetch('/api/trip',{method:'POST',headers:{'content-type':'application/json','cache-control':'no-cache'},cache:'no-store',body:JSON.stringify(payload)});if(!r.ok)throw new Error('Backend unavailable');data=await r.json()}catch(apiError){$('status').textContent='Loading live destination data…';data=await clientTripFallback(payload)}$('status').textContent=`✓ Ready: ${data.destination.displayName||data.destination.name}`;render(data)}catch(e){$('status').textContent='Error: '+e.message;$('app').classList.remove('show')}finally{btn.disabled=false;$('loadingOverlay').classList.remove('show')}};
 </script>
 </body></html>
