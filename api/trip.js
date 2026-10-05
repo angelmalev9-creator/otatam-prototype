@@ -9,7 +9,7 @@ async function getJSON(url,timeout=7000){
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeout);
   try{
     const r=await fetch(url,{signal:ctl.signal,headers:{'user-agent':'OTATAM-production-mvp/2.1'}});
-    if(!r.ok)throw new Error(`Грешка от доставчик ${r.status}`);
+    if(!r.ok)throw new Error(`Provider error ${r.status}`);
     return await r.json();
   }finally{clearTimeout(timer)}
 }
@@ -50,7 +50,7 @@ async function resolveCountryCapital(countryEnglish,countryLocal,countryCode){
 async function geocode(name){
   const hasCyr=/[а-я]/i.test(name),langs=hasCyr?['bg','en']:['en','bg'];
   const results=(await Promise.all(langs.map(l=>geoSearch(name,l).catch(()=>[])))).flat();
-  if(!results.length)throw new Error('Дестинацията не е намерена');
+  if(!results.length)throw new Error('Destination not found');
   const ranked=results.slice().sort((a,b)=>scoreGeo(b,name)-scoreGeo(a,name)),x=ranked[0];
   if(x.feature_code==='PCLI'){
     const en=results.find(r=>r.feature_code==='PCLI'&&r.country_code===x.country_code&&/[A-Za-z]/.test(r.name))||x;
@@ -103,7 +103,7 @@ async function overpassPlaces(lat,lon,limit,destName){
     if(!name||plat==null||plon==null||seen.has(norm(name))||irrelevant(name,destName))continue;
     seen.add(norm(name));
     const rawImage=/^https?:\/\//i.test(e.tags?.image||'')?e.tags.image:null;
-    out.push({name,lat:plat,lon:plon,wikidata:e.tags?.wikidata||null,wikipedia:e.tags?.wikipedia||null,image:rawImage&&!suspiciousImageName(rawImage)?rawImage:null,source:'OpenStreetMap / Wikidata',coordinateConfidence:'точен-osm-обект'});
+    out.push({name,lat:plat,lon:plon,wikidata:e.tags?.wikidata||null,wikipedia:e.tags?.wikipedia||null,image:rawImage&&!suspiciousImageName(rawImage)?rawImage:null,source:'OpenStreetMap / Wikidata',coordinateConfidence:'exact-osm-object'});
     if(out.length>=limit*3)break;
   }
   await enrichWikidata(out);
@@ -120,7 +120,7 @@ async function wikiPlaces(lat,lon,limit,destName){
     const out=[];
     for(const p of pages){
       const c=p.coordinates[0],thumb=p.thumbnail?.source||null;
-      out.push({name:p.title,lat:c.lat,lon:c.lon,wikidata:p.pageprops?.wikibase_item||null,wikipedia:`en:${p.title}`,image:thumb&&!suspiciousImageName(thumb)?thumb:null,source:'Wikipedia GeoSearch / Wikidata',coordinateConfidence:'координати-на-конкретното-място'});
+      out.push({name:p.title,lat:c.lat,lon:c.lon,wikidata:p.pageprops?.wikibase_item||null,wikipedia:`en:${p.title}`,image:thumb&&!suspiciousImageName(thumb)?thumb:null,source:'Wikipedia GeoSearch / Wikidata',coordinateConfidence:'exact-place-coordinates'});
       if(out.length>=limit*3)break;
     }
     await enrichWikidata(out);
@@ -139,7 +139,7 @@ async function wikiPlaces(lat,lon,limit,destName){
 
 function decorate(p,i,input){
   const photo=(input.interests||[]).includes('photo');
-  return{name:p.name,lat:p.lat,lon:p.lon,category:'Забележителност',duration:60,booking:false,description:'Реално място с проверими координати и източник.',why:'Подбрано спрямо темпото, интересите и географската близост.',photoTip:photo?'Посети при мека сутрешна или вечерна светлина и провери натовареността.':'Провери работното време и условията преди посещение.',hiddenGem:i%4===3,wikidata:p.wikidata,wikipedia:p.wikipedia,image:p.image,website:null,phone:null,openingHours:null,address:null,source:p.source,coordinateConfidence:p.coordinateConfidence};
+  return{name:p.name,lat:p.lat,lon:p.lon,category:'Place to visit',duration:60,booking:false,description:'A real place with verifiable coordinates and a traceable source.',why:'Selected for your pace, interests and geographic proximity.',photoTip:photo?'Visit in soft morning or evening light and check crowd levels.':'Check opening hours and access conditions before visiting.',hiddenGem:i%4===3,wikidata:p.wikidata,wikipedia:p.wikipedia,image:p.image,website:null,phone:null,openingHours:null,address:null,source:p.source,coordinateConfidence:p.coordinateConfidence};
 }
 function buildDays(places,input,dest){
   const per=input.pace==='relaxed'?3:input.pace==='fast'?5:4,days=[];
@@ -147,38 +147,46 @@ function buildDays(places,input,dest){
     const start=d*per,stops=[];
     for(let j=0;j<per&&start+j<places.length;j++)stops.push(decorate(places[start+j],j+d*per,input));
     if(!stops.length)break;
-    days.push({title:d===0?`Първи ден в ${dest.name}`:d===input.days-1?'Последни акценти':`Разглеждане на ${dest.name}`,cover:stops.find(s=>s.image)?.image||null,stops});
+    days.push({title:d===0?`First day in ${dest.name}`:d===input.days-1?'Final highlights':`Exploring ${dest.name}`,cover:stops.find(s=>s.image)?.image||null,stops});
   }
   return days;
 }
 function makeBudget(input){
-  const total=Number(input.budget)||0;
+  const total=Math.round((Number(input.budget)||0)*100)/100;
+  const ratios=[['Flights',.24],['Stay',.36],['Food',.18],['Activities',.10],['Local transport',.08]];
+  const planned=Math.round(total*.96*100)/100,categories={};
+  let used=0;
+  ratios.forEach(([name,ratio],i)=>{
+    const amount=i===ratios.length-1?Math.max(0,Math.round((planned-used)*100)/100):Math.round(total*ratio*100)/100;
+    categories[name]=amount;used=Math.round((used+amount)*100)/100;
+  });
+  const buffer=Math.max(0,Math.round((total-used)*100)/100);
   return{
-    mode:'exact-only',
+    mode:'planning-allocation',
     currency:'EUR',
     total,
-    categories:{'Полети':null,'Настаняване':null,'Храна':null,'Активности':null,'Транспорт':null},
-    planned:null,
-    buffer:null,
-    note:'OTATAM не измисля разходи. Бюджетът се потвърждава само от избрани live оферти и въведени от пътуващия лимити.'
+    categories,
+    planned:used,
+    buffer,
+    note:'Planning targets only — not live provider prices. OTATAM replaces them with confirmed prices as offers are selected.'
   };
 }
 function weatherText(w){
   const rainy=[51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99].includes(w.code);
-  return{summary:`В момента: ${Math.round(w.temperature)}°C, усеща се като ${Math.round(w.feels)}°C, вятър ${Math.round(w.wind)} км/ч.`,switch:rainy?'Заради времето: приоритизирай закрити места и провери външните активности.':'Времето е подходящо за външния план; запази една закрита алтернатива.'};
+  return{summary:`Right now: ${Math.round(w.temperature)}°C, feels like ${Math.round(w.feels)}°C, wind ${Math.round(w.wind)} km/h.`,switch:rainy?'Because of the weather, prioritise indoor places and re-check outdoor activities.':'The weather suits the outdoor plan; keep one indoor alternative.'};
 }
 
 module.exports=async function handler(req,res){
-  if(req.method!=='POST')return res.status(405).json({error:'Разрешен е само POST'});
+  if(req.method!=='POST')return res.status(405).json({error:'POST only'});
   try{
     const input={...(req.body||{})};
     input.days=clamp(Number(input.days)||4,1,10);input.travellers=clamp(Number(input.travellers)||2,1,10);input.budget=Math.max(150,Number(input.budget)||1500);
     input.pace=['relaxed','balanced','fast'].includes(input.pace)?input.pace:'balanced';input.style=['save','value','comfort'].includes(input.style)?input.style:'value';if(!Array.isArray(input.interests))input.interests=['culture','architecture'];
     const picked=(input.destination||'').trim()||DESTINATIONS[Math.abs(hash(input.interests.join('|')+'|'+input.budget+'|'+input.days))%DESTINATIONS.length],dest=await geocode(picked),needed=clamp(input.days*(input.pace==='relaxed'?3:input.pace==='fast'?5:4),8,24);
     const [w,places]=await Promise.all([weather(dest.lat,dest.lon),wikiPlaces(dest.lat,dest.lon,needed,dest.searchName||dest.name)]);
-    if(places.length<4)throw new Error('Няма достатъчно надеждни места за тази дестинация');
+    if(places.length<4)throw new Error('Not enough reliable places were found for this destination');
     const days=buildDays(places,input,dest),all=days.flatMap(x=>x.stops),wt=weatherText(w),budget=makeBudget(input);
     res.setHeader('Cache-Control','s-maxage=300, stale-while-revalidate=600');
-    return res.status(200).json({generatedAt:new Date().toISOString(),input,destination:dest,weather:{...w,...wt},days,budget,totalStops:all.length,hiddenGems:all.filter(x=>x.hiddenGem).length,photoSpots:all.filter(x=>x.image).length,confidence:{places:'wikipedia-wikidata-coordinates',weather:'live',budget:'exact-after-live-selections',flights:'external-live-search',stay:'external-live-search'},status:'needs_review'});
-  }catch(e){return res.status(500).json({error:e.message||'Генерирането не успя'})}
+    return res.status(200).json({generatedAt:new Date().toISOString(),input,destination:dest,weather:{...w,...wt},days,budget,totalStops:all.length,hiddenGems:all.filter(x=>x.hiddenGem).length,photoSpots:all.filter(x=>x.image).length,confidence:{places:'wikipedia-wikidata-coordinates',weather:'live',budget:'planning-targets-until-live-selection',flights:'external-live-search',stay:'external-live-search'},status:'needs_review'});
+  }catch(e){return res.status(500).json({error:e.message||'Trip generation failed'})}
 };
