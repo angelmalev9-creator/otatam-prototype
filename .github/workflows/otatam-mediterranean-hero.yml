@@ -1,0 +1,38 @@
+name: Apply Mediterranean hero image
+
+on:
+  push:
+    branches: [otatam-mediterranean-hero]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Replace hero visual only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('public/index.html')
+          s = p.read_text()
+          old_url = 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Eiffel%20Tower%20at%20night%20%28Unsplash%20Fy1UlOIKBII%29.jpg?width=1600'
+          new_url = 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Sunrise%20from%20the%20Mediterranean%20sea.jpg?width=1600'
+          if old_url not in s:
+              raise SystemExit('Current Eiffel hero URL not found; refusing unrelated changes')
+          s = s.replace(old_url, new_url, 1)
+          s = s.replace('linear-gradient(180deg,rgba(3,8,18,.10),rgba(3,8,18,.70))', 'linear-gradient(180deg,rgba(3,8,18,.06),rgba(3,8,18,.48))', 1)
+          s = s.replace('center 46%/cover no-repeat', 'center 52%/cover no-repeat', 1)
+          p.write_text(s)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add public/index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Replace hero with Mediterranean sunrise view'
+          git push origin HEAD:main
